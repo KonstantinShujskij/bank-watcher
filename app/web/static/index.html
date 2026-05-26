@@ -91,7 +91,10 @@
           <td class="right">${money(j.balance, j.currency)}</td>
           <td><span class="pill">${j.status}</span>${j.last_error ? ` <span class="err" title="${j.last_error.replace(/"/g,'&quot;')}">!</span>` : ""}</td>
           <td class="muted">${time(j.last_polled_at)}</td>
-          <td><button data-del="${j.ref}">✕</button></td>
+          <td style="white-space:nowrap;">
+            <button data-toggle="${j.ref}" data-status="${j.status}" title="${j.status === "active" ? "Призупинити опитування" : "Відновити опитування"}">${j.status === "active" ? "⏸" : "▶"}</button>
+            <button data-del="${j.ref}" title="Прибрати з моніторингу">✕</button>
+          </td>
         </tr>`).join("");
     }
 
@@ -129,6 +132,8 @@
     });
 
     document.getElementById("jars").addEventListener("click", async (e) => {
+      const tg = e.target.closest("[data-toggle]");
+      if (tg) { e.stopPropagation(); const action = tg.dataset.status === "active" ? "pause" : "resume"; await api(`/jars/${encodeURIComponent(tg.dataset.toggle)}/${action}`, { method: "POST" }); loadJars(); return; }
       const del = e.target.closest("[data-del]");
       if (del) { e.stopPropagation(); if (confirm("Прибрати банку з моніторингу?")) { await api(`/jars/${encodeURIComponent(del.dataset.del)}`, { method: "DELETE" }); loadJars(); } return; }
       const row = e.target.closest("tr.jar");
