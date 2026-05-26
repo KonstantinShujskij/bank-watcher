@@ -35,6 +35,11 @@ class Settings:
     callback_max_attempts: int = int(os.getenv("CALLBACK_MAX_ATTEMPTS", "10"))
     callback_timeout: float = float(os.getenv("CALLBACK_TIMEOUT", "15"))
 
+    # Доступ до фронта/API (сесійний логін). Порожні значення = вхід вимкнено (deny).
+    auth_user: str = os.getenv("AUTH_USER", "")
+    auth_password: str = os.getenv("AUTH_PASSWORD", "")
+    session_ttl_hours: int = int(os.getenv("SESSION_TTL_HOURS", "168"))
+
     vpn_enabled: bool = _bool("VPN_ENABLED")
     vpn_rotate_seconds: int = int(os.getenv("VPN_ROTATE_SECONDS", "300"))
     vpn_countries: list[str] = field(default_factory=lambda: _csv("VPN_COUNTRIES", "Ukraine"))

@@ -9,10 +9,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import auth
 from .api.routes import router
 from .config import settings
 from .core.callbacks import CallbackSender
@@ -56,6 +57,46 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="bank-watcher", lifespan=lifespan)
+
+PUBLIC_PATHS = {"/login", "/logout"}
+
+
+@app.middleware("http")
+async def require_auth(request: Request, call_next):
+    """Захист усього, крім сторінки/роута логіну. HTML → редірект, /api → 401."""
+    path = request.url.path
+    if path in PUBLIC_PATHS or auth.validate(request.cookies.get(auth.COOKIE_NAME)):
+        return await call_next(request)
+    if path.startswith("/api"):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return RedirectResponse("/login", status_code=302)
+
+
+@app.get("/login", include_in_schema=False)
+async def login_page():
+    return FileResponse(WEB_STATIC / "login.html")
+
+
+@app.post("/login", include_in_schema=False)
+async def login_submit(username: str = Form(...), password: str = Form(...)):
+    if not auth.verify_credentials(username, password):
+        return RedirectResponse("/login?error=1", status_code=302)
+    resp = RedirectResponse("/", status_code=302)
+    resp.set_cookie(
+        auth.COOKIE_NAME, auth.create_session(),
+        httponly=True, samesite="lax", max_age=settings.session_ttl_hours * 3600,
+    )
+    return resp
+
+
+@app.get("/logout", include_in_schema=False)
+async def logout(request: Request):
+    auth.destroy(request.cookies.get(auth.COOKIE_NAME))
+    resp = RedirectResponse("/login", status_code=302)
+    resp.delete_cookie(auth.COOKIE_NAME)
+    return resp
+
+
 app.include_router(router)
 
 

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>bank-watcher · вхід</title>
+  <style>
+    :root { color-scheme: light dark; --bd: #8884; --muted: #8889; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; }
+    form { width: 320px; max-width: calc(100vw - 32px); border: 1px solid var(--bd); border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    input { padding: 10px 12px; border: 1px solid var(--bd); border-radius: 8px; font: inherit; background: transparent; }
+    button { padding: 10px 12px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font: inherit; cursor: pointer; }
+    .err { color: #dc2626; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <form method="post" action="/login">
+    <h1>bank-watcher</h1>
+    <div id="err" class="err" hidden>Невірний логін або пароль</div>
+    <input name="username" placeholder="Логін" autocomplete="username" autofocus required />
+    <input name="password" type="password" placeholder="Пароль" autocomplete="current-password" required />
+    <button type="submit">Увійти</button>
+  </form>
+  <script>
+    if (new URLSearchParams(location.search).get("error")) document.getElementById("err").hidden = false;
+  </script>
+</body>
+</html>
