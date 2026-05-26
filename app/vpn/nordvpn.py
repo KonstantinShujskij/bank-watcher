@@ -1,21 +1,22 @@
-"""Тонка обгортка над NordVPN CLI з періодичною ротацією вихідного IP.
+"""NordVPN CLI з пошуком РОБОЧОГО екзиту (monobank 403'ить частину VPN-IP).
 
-Навіщо: публічне API банок лімітує per-IP; при опитуванні раз на секунду
-ротація IP знижує ризик тротлінгу/бану.
+Логіка:
+  connect → проба (реальний фетч банк-API) → якщо ок, лишаємось на цьому IP;
+  якщо ні (403/збій) — реконект на інший екзит, і так до vpn_max_attempts.
+  Періодично (vpn_check_seconds) ре-пробимо поточний екзит; як почав фейлити —
+  шукаємо новий. Якщо робочого екзиту нема і vpn_fallback_direct=true — від'єднуємось
+  (прямий IP сервера працює), щоб сервіс не лишився без зв'язку.
 
-ВАЖЛИВО (split-tunnel): ротація на мить рве з'єднання. Полл-цикл це переживає
-(є retry на рівні тіку). Але щоб ротація НЕ рвала вхідні з'єднання до нашого
-API/фронта, на сервері треба винести наш порт з тунелю, напр.:
-
-    nordvpn allowlist add port <PORT>
-
-Локально лишай VPN_ENABLED=false.
+Split-tunnel: порти 22 і 8080 в allowlist (SSH/API переживають реконект).
 """
 from __future__ import annotations
 
 import asyncio
 import itertools
 import logging
+from typing import Awaitable, Callable
+
+import httpx
 
 from ..config import settings
 
@@ -23,7 +24,9 @@ log = logging.getLogger("vpn")
 
 
 class NordVPN:
-    def __init__(self) -> None:
+    def __init__(self, probe: Callable[[], Awaitable[bool]]) -> None:
+        # probe() -> True, якщо банк-API доступне з поточного екзиту
+        self._probe = probe
         self._countries = itertools.cycle(settings.vpn_countries or ["Ukraine"])
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -40,23 +43,55 @@ class NordVPN:
             await self._task
 
     async def _run(self) -> None:
-        await self._connect(next(self._countries))
+        await self._ensure_working_exit()
         while not self._stop.is_set():
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=settings.vpn_rotate_seconds)
+                await asyncio.wait_for(self._stop.wait(), timeout=settings.vpn_check_seconds)
             except asyncio.TimeoutError:
-                await self._connect(next(self._countries))
+                if not await self._probe_safe():
+                    log.warning("vpn exit started failing the probe → searching a new exit")
+                    await self._ensure_working_exit()
+
+    async def _ensure_working_exit(self) -> bool:
+        """Перебираємо екзити, доки проба не пройде. Інакше — fallback на прямий IP."""
+        for attempt in range(1, settings.vpn_max_attempts + 1):
+            country = next(self._countries)
+            await self._connect(country)
+            await asyncio.sleep(settings.vpn_settle_seconds)
+            if await self._probe_safe():
+                log.info("vpn exit OK via %s (ip=%s) after %d attempt(s)",
+                         country, await self._current_ip(), attempt)
+                return True
+            log.warning("vpn exit %s blocked/failing (attempt %d/%d) → reconnecting",
+                        country, attempt, settings.vpn_max_attempts)
+
+        if settings.vpn_fallback_direct:
+            log.error("no working vpn exit in %d attempts → FALLBACK to direct IP",
+                      settings.vpn_max_attempts)
+            await self._run_cli("disconnect")
+        else:
+            log.error("no working vpn exit in %d attempts → staying on last exit (degraded)",
+                      settings.vpn_max_attempts)
+        return False
+
+    async def _probe_safe(self) -> bool:
+        try:
+            return await self._probe()
+        except Exception as exc:
+            log.warning("vpn probe error: %s", exc)
+            return False
 
     async def _connect(self, country: str) -> None:
         rc, out = await self._run_cli("connect", country)
-        if rc == 0:
-            log.info("vpn connected: %s", country)
-        else:
+        if rc != 0:
             log.warning("vpn connect %s failed (rc=%s): %s", country, rc, out)
 
-    async def status(self) -> str:
-        _, out = await self._run_cli("status")
-        return out
+    async def _current_ip(self) -> str:
+        try:
+            async with httpx.AsyncClient(timeout=8) as c:
+                return (await c.get("https://api.ipify.org")).text.strip()
+        except Exception:
+            return "?"
 
     @staticmethod
     async def _run_cli(*args: str) -> tuple[int, str]:

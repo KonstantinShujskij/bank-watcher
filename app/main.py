@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import auth
+from .adapters import get_adapter
 from .api.routes import router
 from .config import settings
 from .core.callbacks import CallbackSender
@@ -37,7 +38,17 @@ async def lifespan(app: FastAPI):
     client = httpx.AsyncClient(timeout=settings.http_timeout)
     sender = CallbackSender(db, client)
     poller = Poller(db, client, sender)
-    vpn = NordVPN()
+
+    async def vpn_probe() -> bool:
+        # окремий клієнт → свіже з'єднання через поточний тунель (без stale-pool)
+        try:
+            async with httpx.AsyncClient(timeout=settings.http_timeout) as c:
+                await get_adapter("mono").fetch_jar(settings.vpn_probe_jar, c)
+            return True
+        except Exception:
+            return False
+
+    vpn = NordVPN(vpn_probe)
 
     app.state.db = db
     app.state.client = client
