@@ -35,6 +35,10 @@ class Settings:
     callback_max_attempts: int = int(os.getenv("CALLBACK_MAX_ATTEMPTS", "10"))
     callback_timeout: float = float(os.getenv("CALLBACK_TIMEOUT", "15"))
 
+    # HMAC-секрет для машинних (service-to-service) викликів від ncP2P.
+    # Порожній = машинна авторизація вимкнена (лишається тільки сесійний логін).
+    inbound_secret: str = os.getenv("INBOUND_SECRET", "")
+
     # Доступ до фронта/API (сесійний логін). Порожні значення = вхід вимкнено (deny).
     auth_user: str = os.getenv("AUTH_USER", "")
     auth_password: str = os.getenv("AUTH_PASSWORD", "")

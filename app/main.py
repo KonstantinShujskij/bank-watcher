@@ -63,9 +63,13 @@ PUBLIC_PATHS = {"/login", "/logout"}
 
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
-    """Захист усього, крім сторінки/роута логіну. HTML → редірект, /api → 401."""
+    """Захист усього, крім логіну. Люди — сесійна кука; ncP2P — HMAC-підпис тіла."""
     path = request.url.path
     if path in PUBLIC_PATHS or auth.validate(request.cookies.get(auth.COOKIE_NAME)):
+        return await call_next(request)
+    # машинні (service-to-service) виклики від ncP2P — HMAC над сирим тілом
+    sig = request.headers.get("X-Signature")
+    if sig and auth.verify_signature(await request.body(), sig):
         return await call_next(request)
     if path.startswith("/api"):
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)

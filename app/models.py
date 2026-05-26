@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class RegisterJarRequest(BaseModel):
-    bank: str = Field(default="mono", description="Ідентифікатор банку/адаптера")
+    bank: Optional[str] = Field(default=None, description="Банк/адаптер; якщо не вказано — визначається з url")
     url: str = Field(description="Посилання на банку/збір або готовий ref")
     card: Optional[str] = Field(default=None, description="Номер картки (лейбл/звірка)")
     callback_url: Optional[str] = Field(default=None, description="URL для колбеків про зарахування")

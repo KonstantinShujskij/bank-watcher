@@ -8,7 +8,7 @@ from __future__ import annotations
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from ..adapters import available_banks, get_adapter
+from ..adapters import available_banks, detect_bank, get_adapter
 from ..db import Database
 from ..models import CreditOut, JarOut, RegisterJarRequest
 
@@ -62,8 +62,9 @@ async def register_jar(
     db: Database = Depends(get_db),
     client: httpx.AsyncClient = Depends(get_client),
 ):
+    bank = req.bank or detect_bank(req.url) or "mono"
     try:
-        adapter = get_adapter(req.bank)
+        adapter = get_adapter(bank)
     except ValueError as e:
         raise HTTPException(400, str(e))
     ref = adapter.parse_ref(req.url)
@@ -75,7 +76,7 @@ async def register_jar(
         raise HTTPException(502, f"Не вдалося отримати дані збору: {e}")
     # baseline = поточний баланс на момент підписки → не фаєримо вже зібране
     await db.upsert_jar(
-        ref=ref, bank=req.bank, url=req.url, card=req.card, name=jar.name,
+        ref=ref, bank=bank, url=req.url, card=req.card, name=jar.name,
         currency=jar.currency, baseline_amount=jar.amount, callback_url=req.callback_url,
     )
     return _jar_out(await db.get_jar(ref))

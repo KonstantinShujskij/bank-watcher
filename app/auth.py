@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import secrets
 import time
@@ -14,6 +15,14 @@ import time
 from .config import settings
 
 COOKIE_NAME = "bw_session"
+
+
+def verify_signature(body: bytes, signature: str | None) -> bool:
+    """HMAC-SHA256 над сирим тілом для машинних викликів від ncP2P."""
+    if not settings.inbound_secret or not signature:
+        return False
+    expected = hmac.new(settings.inbound_secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 _sessions: dict[str, float] = {}  # token -> expiry (epoch seconds)
 
