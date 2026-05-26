@@ -46,11 +46,12 @@ class Settings:
 
     vpn_enabled: bool = _bool("VPN_ENABLED")
     vpn_countries: list[str] = field(default_factory=lambda: _csv("VPN_COUNTRIES", "Ukraine"))
-    # «знайди робочий екзит»: проба банк-API після конекту; невдало → реконект на інший IP
+    # «знайди робочий екзит»: на старті connect→проба; робочий лишаємо.
+    # Реконект — ЛИШЕ коли поллер ловить помилки (реактивно, без періодичної ротації).
     vpn_probe_jar: str = os.getenv("VPN_PROBE_JAR", "4xPDzE2tmw")  # публічна банка для перевірки
-    vpn_check_seconds: int = int(os.getenv("VPN_CHECK_SECONDS", "120"))  # період ре-проби поточного екзиту
-    vpn_max_attempts: int = int(os.getenv("VPN_MAX_ATTEMPTS", "8"))      # скільки екзитів перебрати
-    vpn_settle_seconds: float = float(os.getenv("VPN_SETTLE_SECONDS", "3"))  # пауза після конекту
+    vpn_max_attempts: int = int(os.getenv("VPN_MAX_ATTEMPTS", "8"))      # скільки екзитів перебрати в пошуку
+    vpn_settle_seconds: float = float(os.getenv("VPN_SETTLE_SECONDS", "3"))  # пауза після connect перед пробою
+    vpn_research_cooldown: int = int(os.getenv("VPN_RESEARCH_COOLDOWN", "60"))  # мін. інтервал між пошуками (анти-трешинг)
     vpn_fallback_direct: bool = _bool("VPN_FALLBACK_DIRECT", "true")     # нема робочого екзиту → прямий IP
 
 

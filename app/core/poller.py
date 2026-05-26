@@ -26,10 +26,13 @@ def credit_id(jar_ref: str, balance_after: int) -> str:
 
 
 class Poller:
-    def __init__(self, db: Database, client: httpx.AsyncClient, sender: CallbackSender) -> None:
+    def __init__(self, db: Database, client: httpx.AsyncClient, sender: CallbackSender,
+                 on_fetch_error=None) -> None:
         self.db = db
         self.client = client
         self.sender = sender
+        # сигнал назовні (VPN): фетч банк-API провалився → можливо, екзит заблоковано
+        self._on_fetch_error = on_fetch_error
         self._sem = asyncio.Semaphore(settings.poll_concurrency)
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -70,6 +73,9 @@ class Poller:
             except Exception as exc:
                 await self.db.mark_jar_error(jar["ref"], str(exc))
                 log.warning("fetch %s failed: %s", jar["ref"], exc)
+                if self._on_fetch_error:
+                    try: self._on_fetch_error()
+                    except Exception: pass
                 return
 
             delta = fresh.amount - jar["last_amount"]

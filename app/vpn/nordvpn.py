@@ -1,11 +1,12 @@
 """NordVPN CLI з пошуком РОБОЧОГО екзиту (monobank 403'ить частину VPN-IP).
 
 Логіка:
-  connect → проба (реальний фетч банк-API) → якщо ок, лишаємось на цьому IP;
-  якщо ні (403/збій) — реконект на інший екзит, і так до vpn_max_attempts.
-  Періодично (vpn_check_seconds) ре-пробимо поточний екзит; як почав фейлити —
-  шукаємо новий. Якщо робочого екзиту нема і vpn_fallback_direct=true — від'єднуємось
-  (прямий IP сервера працює), щоб сервіс не лишився без зв'язку.
+  - на СТАРТІ: connect → проба (реальний фетч банк-API) → робочий екзит лишаємо;
+    невдало — реконект на інший екзит, до vpn_max_attempts;
+  - ДАЛІ: НІЯКОЇ періодичної ротації. Реконект лише РЕАКТИВНО — коли поллер
+    повідомляє про помилки (через request_research()). Кулдаун анти-трешингу.
+  - якщо робочого екзиту нема і vpn_fallback_direct=true — від'єднуємось
+    (прямий IP сервера працює), щоб сервіс не лишився без зв'язку.
 
 Split-tunnel: порти 22 і 8080 в allowlist (SSH/API переживають реконект).
 """
@@ -14,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import time
 from typing import Awaitable, Callable
 
 import httpx
@@ -30,6 +32,8 @@ class NordVPN:
         self._countries = itertools.cycle(settings.vpn_countries or ["Ukraine"])
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        self._research = asyncio.Event()
+        self._last_search = 0.0
 
     def start(self) -> None:
         if not settings.vpn_enabled:
@@ -39,21 +43,30 @@ class NordVPN:
 
     async def stop(self) -> None:
         self._stop.set()
+        self._research.set()  # розблокувати _run
         if self._task:
             await self._task
+
+    def request_research(self) -> None:
+        """Зовнішній сигнал (від поллера): поточний екзит, схоже, не робочий."""
+        self._research.set()
 
     async def _run(self) -> None:
         await self._ensure_working_exit()
         while not self._stop.is_set():
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=settings.vpn_check_seconds)
-            except asyncio.TimeoutError:
-                if not await self._probe_safe():
-                    log.warning("vpn exit started failing the probe → searching a new exit")
-                    await self._ensure_working_exit()
+            await self._research.wait()
+            self._research.clear()
+            if self._stop.is_set():
+                break
+            # анти-трешинг: не шукаємо частіше, ніж раз на cooldown
+            if time.monotonic() - self._last_search < settings.vpn_research_cooldown:
+                continue
+            log.warning("poller reported errors → re-searching vpn exit")
+            await self._ensure_working_exit()
 
     async def _ensure_working_exit(self) -> bool:
         """Перебираємо екзити, доки проба не пройде. Інакше — fallback на прямий IP."""
+        self._last_search = time.monotonic()
         for attempt in range(1, settings.vpn_max_attempts + 1):
             country = next(self._countries)
             await self._connect(country)
@@ -61,6 +74,7 @@ class NordVPN:
             if await self._probe_safe():
                 log.info("vpn exit OK via %s (ip=%s) after %d attempt(s)",
                          country, await self._current_ip(), attempt)
+                self._last_search = time.monotonic()
                 return True
             log.warning("vpn exit %s blocked/failing (attempt %d/%d) → reconnecting",
                         country, attempt, settings.vpn_max_attempts)
@@ -72,6 +86,7 @@ class NordVPN:
         else:
             log.error("no working vpn exit in %d attempts → staying on last exit (degraded)",
                       settings.vpn_max_attempts)
+        self._last_search = time.monotonic()
         return False
 
     async def _probe_safe(self) -> bool:

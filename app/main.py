@@ -37,7 +37,6 @@ async def lifespan(app: FastAPI):
     await db.connect()
     client = httpx.AsyncClient(timeout=settings.http_timeout)
     sender = CallbackSender(db, client)
-    poller = Poller(db, client, sender)
 
     async def vpn_probe() -> bool:
         # окремий клієнт → свіже з'єднання через поточний тунель (без stale-pool)
@@ -49,6 +48,8 @@ async def lifespan(app: FastAPI):
             return False
 
     vpn = NordVPN(vpn_probe)
+    # поллер сигналить VPN при помилках фетчу → реконект лише за потреби
+    poller = Poller(db, client, sender, on_fetch_error=vpn.request_research)
 
     app.state.db = db
     app.state.client = client
