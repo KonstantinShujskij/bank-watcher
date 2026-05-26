@@ -71,7 +71,7 @@
     const sym = { "980": "₴", "840": "$", "978": "€" };
     const money = (kop, cur) => (kop / 100).toLocaleString("uk-UA", { minimumFractionDigits: 2 }) + " " + (sym[cur] || "");
     const time = (ms) => ms ? new Date(ms).toLocaleString("uk-UA") : "—";
-    const maskCard = (c) => { if (!c) return "—"; const d = (c.match(/\d/g) || []).join(""); return d.length < 8 ? d : d.slice(0,4)+" **** "+d.slice(-4); };
+    const fmtCard = (c) => { if (!c) return "—"; const d = (c.match(/\d/g) || []).join(""); return d.replace(/(.{4})/g, "$1 ").trim(); };
     const cbClass = (s) => ({ delivered: "ok", failed: "err", pending: "pend", skipped: "muted" }[s] || "");
 
     async function loadBanks() {
@@ -87,7 +87,7 @@
         <tr class="jar" data-ref="${j.ref}" data-name="${(j.name||j.ref).replace(/"/g,'&quot;')}">
           <td>${j.bank}</td>
           <td>${j.name || ""}<div class="muted mono">${j.ref}</div></td>
-          <td class="mono">${maskCard(j.card)}</td>
+          <td class="mono">${fmtCard(j.card)}</td>
           <td class="right">${money(j.balance, j.currency)}</td>
           <td><span class="pill">${j.status}</span>${j.last_error ? ` <span class="err" title="${j.last_error.replace(/"/g,'&quot;')}">!</span>` : ""}</td>
           <td class="muted">${time(j.last_polled_at)}</td>
