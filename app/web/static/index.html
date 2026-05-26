@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>bank-watcher</title>
+  <style>
+    :root { color-scheme: light dark; --bd: #8884; --muted: #8889; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; max-width: 1100px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .muted { color: var(--muted); font-size: 13px; }
+    form { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; align-items: center; }
+    input, select, button { padding: 8px 10px; border: 1px solid var(--bd); border-radius: 8px; font: inherit; background: transparent; }
+    input { min-width: 180px; }
+    button { cursor: pointer; }
+    button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--bd); }
+    th { font-size: 12px; text-transform: uppercase; color: var(--muted); }
+    tr.jar { cursor: pointer; }
+    tr.jar:hover { background: #8881; }
+    .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--bd); }
+    .ok { color: #16a34a; } .err { color: #dc2626; } .pend { color: #d97706; }
+    .right { text-align: right; }
+    .hint { background: #8881; border: 1px solid var(--bd); border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+    section { margin-top: 24px; }
+    .mono { font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <h1>bank-watcher</h1>
+  <div class="muted">Моніторинг поповнень зборів. Зарахування фіксуються як приріст балансу між опитуваннями (раз/1с).</div>
+
+  <form id="add-form">
+    <select id="bank"></select>
+    <input id="url" placeholder="посилання на банку / збір" required />
+    <input id="card" placeholder="номер картки (опц.)" />
+    <input id="callback" placeholder="callback URL (опц.)" />
+    <button class="primary" type="submit">Додати</button>
+    <span id="add-status" class="muted"></span>
+  </form>
+
+  <section>
+    <table>
+      <thead>
+        <tr>
+          <th>Банк</th><th>Назва / ref</th><th>Картка</th>
+          <th class="right">Баланс</th><th>Статус</th><th>Останній полл</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="jars"></tbody>
+    </table>
+  </section>
+
+  <section id="credits-section" hidden>
+    <h1 style="font-size:16px">Історія зарахувань — <span id="credits-title" class="mono"></span></h1>
+    <table>
+      <thead>
+        <tr><th>Час</th><th class="right">Сума</th><th class="right">Баланс після</th><th>Колбек</th><th>Спроб</th></tr>
+      </thead>
+      <tbody id="credits"></tbody>
+    </table>
+  </section>
+
+  <script>
+    const api = (p, opt) => fetch("/api" + p, opt).then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e.detail || r.status)));
+    const sym = { "980": "₴", "840": "$", "978": "€" };
+    const money = (kop, cur) => (kop / 100).toLocaleString("uk-UA", { minimumFractionDigits: 2 }) + " " + (sym[cur] || "");
+    const time = (ms) => ms ? new Date(ms).toLocaleString("uk-UA") : "—";
+    const maskCard = (c) => { if (!c) return "—"; const d = (c.match(/\d/g) || []).join(""); return d.length < 8 ? d : d.slice(0,4)+" **** "+d.slice(-4); };
+    const cbClass = (s) => ({ delivered: "ok", failed: "err", pending: "pend", skipped: "muted" }[s] || "");
+
+    async function loadBanks() {
+      const { banks } = await api("/banks");
+      document.getElementById("bank").innerHTML = banks.map(b => `<option value="${b}">${b}</option>`).join("");
+    }
+
+    async function loadJars() {
+      const jars = await api("/jars");
+      const tb = document.getElementById("jars");
+      if (!jars.length) { tb.innerHTML = `<tr><td colspan="7" class="muted">Поки порожньо — додай банку вище.</td></tr>`; return; }
+      tb.innerHTML = jars.map(j => `
+        <tr class="jar" data-ref="${j.ref}" data-name="${(j.name||j.ref).replace(/"/g,'&quot;')}">
+          <td>${j.bank}</td>
+          <td>${j.name || ""}<div class="muted mono">${j.ref}</div></td>
+          <td class="mono">${maskCard(j.card)}</td>
+          <td class="right">${money(j.balance, j.currency)}</td>
+          <td><span class="pill">${j.status}</span>${j.last_error ? ` <span class="err" title="${j.last_error.replace(/"/g,'&quot;')}">!</span>` : ""}</td>
+          <td class="muted">${time(j.last_polled_at)}</td>
+          <td><button data-del="${j.ref}">✕</button></td>
+        </tr>`).join("");
+    }
+
+    async function loadCredits(ref, name) {
+      const rows = await api(`/jars/${encodeURIComponent(ref)}/credits`);
+      document.getElementById("credits-title").textContent = name;
+      document.getElementById("credits-section").hidden = false;
+      const tb = document.getElementById("credits");
+      tb.innerHTML = rows.length ? rows.map(c => `
+        <tr>
+          <td>${time(c.detected_at)}</td>
+          <td class="right ok">+${money(c.amount, c.currency)}</td>
+          <td class="right muted">${money(c.balance_after, c.currency)}</td>
+          <td class="${cbClass(c.callback_status)}">${c.callback_status}</td>
+          <td>${c.callback_attempts}</td>
+        </tr>`).join("") : `<tr><td colspan="5" class="muted">Зарахувань ще не зафіксовано.</td></tr>`;
+    }
+
+    document.getElementById("add-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const status = document.getElementById("add-status");
+      status.textContent = "Додаю…";
+      try {
+        await api("/jars", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bank: document.getElementById("bank").value,
+            url: document.getElementById("url").value,
+            card: document.getElementById("card").value || null,
+            callback_url: document.getElementById("callback").value || null,
+          }),
+        });
+        status.textContent = ""; e.target.reset(); loadJars();
+      } catch (err) { status.textContent = "Помилка: " + err; }
+    });
+
+    document.getElementById("jars").addEventListener("click", async (e) => {
+      const del = e.target.closest("[data-del]");
+      if (del) { e.stopPropagation(); if (confirm("Прибрати банку з моніторингу?")) { await api(`/jars/${encodeURIComponent(del.dataset.del)}`, { method: "DELETE" }); loadJars(); } return; }
+      const row = e.target.closest("tr.jar");
+      if (row) loadCredits(row.dataset.ref, row.dataset.name);
+    });
+
+    loadBanks();
+    loadJars();
+    setInterval(loadJars, 3000);
+  </script>
+</body>
+</html>
