@@ -26,6 +26,15 @@ def sign(body: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
+def sign_credit(p: dict, secret: str) -> str:
+    """Підпис над канонічним рядком полів (стабільно для Python↔JS перевірки)."""
+    canonical = "|".join([
+        "credit", p["event_id"], p["bank"] or "", p["jar_ref"], p["card"] or "",
+        str(p["amount"]), p["currency"], str(p["balance_after"]), str(p["detected_at"]),
+    ])
+    return hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+
+
 class CallbackSender:
     def __init__(self, db: Database, client: httpx.AsyncClient) -> None:
         self.db = db
@@ -76,13 +85,14 @@ class CallbackSender:
             "balance_after": credit["balance_after"],
             "detected_at": credit["detected_at"],
         }
+        # підпис над канонічним рядком полів → у тіло (ncP2P перевіряє з розпарсеного body)
+        if settings.callback_secret:
+            payload["signature"] = sign_credit(payload, settings.callback_secret)
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
         headers = {
             "Content-Type": "application/json",
             "X-Event-Id": credit["id"],
         }
-        if settings.callback_secret:
-            headers["X-Signature"] = sign(body, settings.callback_secret)
 
         try:
             resp = await self.client.post(
