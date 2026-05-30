@@ -67,7 +67,10 @@ async def register_jar(
         adapter = get_adapter(bank)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    ref = adapter.parse_ref(req.url)
+    try:
+        ref = await adapter.resolve_ref(req.url, client)
+    except Exception as e:
+        raise HTTPException(400, f"Не вдалося розпізнати ref збору: {e}")
     if not ref:
         raise HTTPException(400, "Не вдалося розпізнати ref збору з url")
     try:
@@ -83,7 +86,10 @@ async def register_jar(
 
 
 @router.post("/jars/resolve", response_model=ResolveRefOut)
-async def resolve_ref(req: ResolveRefRequest):
+async def resolve_ref(
+    req: ResolveRefRequest,
+    client: httpx.AsyncClient = Depends(get_client),
+):
     """Розпарсити ref банки з url БЕЗ підписки/запису в БД.
 
     ncP2P викликає це на pre-check у діалозі створення виводу, щоб дізнатися
@@ -95,7 +101,10 @@ async def resolve_ref(req: ResolveRefRequest):
         adapter = get_adapter(bank)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    ref = adapter.parse_ref(req.url)
+    try:
+        ref = await adapter.resolve_ref(req.url, client)
+    except Exception as e:
+        raise HTTPException(400, f"Не вдалося розпізнати ref збору: {e}")
     if not ref:
         raise HTTPException(400, "Не вдалося розпізнати ref збору з url")
     return ResolveRefOut(ref=ref, bank=bank)

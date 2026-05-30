@@ -24,6 +24,14 @@ class BankAdapter(ABC):
     def parse_ref(self, text: str) -> str:
         """Витягти стабільний ref збору з посилання (або повернути готовий ref)."""
 
+    async def resolve_ref(self, url: str, client: httpx.AsyncClient) -> str:
+        """Розвʼязати ref зі складного посилання, за потреби через мережу.
+
+        Дефолт — синхронний parse_ref (моно: токен прямо в URL). Банки, де ref
+        видно лише після редіректу (PUMB: короткий лінк → box_id), перевизначають.
+        """
+        return self.parse_ref(url)
+
     @abstractmethod
     async def fetch_jar(self, ref: str, client: httpx.AsyncClient) -> NormalizedJar:
         """Отримати поточний агрегований стан збору через публічне API банку."""

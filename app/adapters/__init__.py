@@ -5,12 +5,17 @@ from urllib.parse import urlparse
 
 from .base import BankAdapter, NormalizedJar
 from .monobank import MonobankAdapter
+from .pumb import PumbAdapter
 
 _ADAPTERS: dict[str, BankAdapter] = {}
 
 # Хост посилання → банк (для автовизначення, щоб ncP2P слав лише url)
 _HOST_BANK: dict[str, str] = {
     "send.monobank.ua": "mono",
+    "mobile-app.pumb.ua": "pumb",     # короткий лінк PUMB-збору
+    "frames.payhub.com.ua": "pumb",   # frames-URL із box_id
+    "frames2.payhub.com.ua": "pumb",
+    "rlyeh2.payhub.com.ua": "pumb",
 }
 
 
@@ -37,5 +42,6 @@ def available_banks() -> list[str]:
 
 # Вбудовані адаптери
 register(MonobankAdapter())
+register(PumbAdapter())
 
 __all__ = ["BankAdapter", "NormalizedJar", "register", "get_adapter", "available_banks", "detect_bank"]
