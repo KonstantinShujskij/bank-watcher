@@ -69,6 +69,18 @@ class Poller:
         async with self._sem:
             try:
                 adapter = get_adapter(jar["bank"])
+            except Exception as exc:
+                log.warning("no adapter for %s: %s", jar["ref"], exc)
+                return
+
+            # Per-bank каденція: загальний тік ~1с, але банк із більшим
+            # poll_interval (PUMB=15с) опитуємо рідше — агрегат рухається раз на
+            # кілька хвилин, нема сенсу довбити API щосекунди.
+            last = jar["last_polled_at"]
+            if last is not None and (int(time.time() * 1000) - last) < adapter.poll_interval * 1000:
+                return
+
+            try:
                 fresh = await adapter.fetch_jar(jar["ref"], self.client)
             except Exception as exc:
                 await self.db.mark_jar_error(jar["ref"], str(exc))

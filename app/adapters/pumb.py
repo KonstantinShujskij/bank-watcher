@@ -28,6 +28,7 @@ class JarError(Exception):
 
 class PumbAdapter(BankAdapter):
     bank = "pumb"
+    poll_interval = 15.0  # агрегат оновлюється раз на 3-5 хв → 15с достатньо
 
     def _box_id_from(self, text: str) -> str | None:
         """box_id з готового UUID або з URL із ?box_id=…; інакше None."""
