@@ -152,6 +152,22 @@ class Database:
         )
         return await cur.fetchall()
 
+    async def sum_credits(self, jar_ref, since=0) -> int:
+        """Сума всіх зарахувань (приростів) збору з моменту підписки, копійки.
+
+        Кожен кредит — це додатний приріст балансу (поповнення), тож сума
+        монотонна і НЕ зменшується, коли власник знімає кошти з банки (на
+        відміну від поточного балансу `last_amount - last_withdrawal`).
+        `since` за замовч. = created_at банки, щоб не зачепити можливі
+        кредити від попередньої підписки того ж ref (видалення не каскадить).
+        """
+        cur = await self.db.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS s FROM credits WHERE jar_ref=? AND detected_at >= ?",
+            (jar_ref, since),
+        )
+        row = await cur.fetchone()
+        return row["s"] if row else 0
+
     async def pending_callbacks(self, max_attempts, limit=50):
         cur = await self.db.execute(
             "SELECT * FROM credits WHERE callback_status='pending' AND callback_attempts < ? "

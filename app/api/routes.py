@@ -23,13 +23,14 @@ def get_client(request: Request) -> httpx.AsyncClient:
     return request.app.state.client
 
 
-def _jar_out(row) -> JarOut:
+async def _jar_out(row, db: Database) -> JarOut:
     return JarOut(
         ref=row["ref"], bank=row["bank"], url=row["url"], card=row["card"],
         name=row["name"], currency=row["currency"],
         baseline_amount=row["baseline_amount"], last_amount=row["last_amount"],
         last_withdrawal=row["last_withdrawal"],
         balance=row["last_amount"] - row["last_withdrawal"],
+        accumulated=await db.sum_credits(row["ref"], since=row["created_at"]),
         callback_url=row["callback_url"], status=row["status"],
         created_at=row["created_at"], last_polled_at=row["last_polled_at"],
         last_error=row["last_error"],
@@ -82,7 +83,7 @@ async def register_jar(
         ref=ref, bank=bank, url=req.url, card=req.card, name=jar.name,
         currency=jar.currency, baseline_amount=jar.amount, callback_url=req.callback_url,
     )
-    return _jar_out(await db.get_jar(ref))
+    return await _jar_out(await db.get_jar(ref), db)
 
 
 @router.post("/jars/resolve", response_model=ResolveRefOut)
@@ -112,7 +113,7 @@ async def resolve_ref(
 
 @router.get("/jars", response_model=list[JarOut])
 async def list_jars(db: Database = Depends(get_db)):
-    return [_jar_out(r) for r in await db.list_jars()]
+    return [await _jar_out(r, db) for r in await db.list_jars()]
 
 
 @router.get("/jars/{ref}", response_model=JarOut)
@@ -120,7 +121,7 @@ async def get_jar(ref: str, db: Database = Depends(get_db)):
     row = await db.get_jar(ref)
     if not row:
         raise HTTPException(404, "Банку не знайдено")
-    return _jar_out(row)
+    return await _jar_out(row, db)
 
 
 @router.delete("/jars/{ref}")
@@ -136,7 +137,7 @@ async def pause_jar(ref: str, db: Database = Depends(get_db)):
     if not await db.get_jar(ref):
         raise HTTPException(404, "Банку не знайдено")
     await db.set_jar_status(ref, "paused")
-    return _jar_out(await db.get_jar(ref))
+    return await _jar_out(await db.get_jar(ref), db)
 
 
 @router.post("/jars/{ref}/resume", response_model=JarOut)
@@ -144,7 +145,7 @@ async def resume_jar(ref: str, db: Database = Depends(get_db)):
     if not await db.get_jar(ref):
         raise HTTPException(404, "Банку не знайдено")
     await db.set_jar_status(ref, "active")
-    return _jar_out(await db.get_jar(ref))
+    return await _jar_out(await db.get_jar(ref), db)
 
 
 @router.get("/jars/{ref}/credits", response_model=list[CreditOut])

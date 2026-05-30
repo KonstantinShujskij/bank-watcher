@@ -33,7 +33,8 @@ class JarOut(BaseModel):
     baseline_amount: int
     last_amount: int
     last_withdrawal: int
-    balance: int
+    balance: int          # поточний баланс банки (last_amount - last_withdrawal); падає при знятті
+    accumulated: int      # усього накопичено з моменту підписки (сума поповнень); монотонне
     callback_url: Optional[str]
     status: str
     created_at: int

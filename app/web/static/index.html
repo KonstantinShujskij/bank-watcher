@@ -49,7 +49,7 @@
       <thead>
         <tr>
           <th>Банк</th><th>Назва / ref</th><th>Картка</th>
-          <th class="right">Баланс</th><th>Статус</th><th>Останній полл</th><th></th>
+          <th class="right">Накопичено</th><th class="right">Баланс</th><th>Статус</th><th>Останній полл</th><th></th>
         </tr>
       </thead>
       <tbody id="jars"></tbody>
@@ -82,13 +82,14 @@
     async function loadJars() {
       const jars = await api("/jars");
       const tb = document.getElementById("jars");
-      if (!jars.length) { tb.innerHTML = `<tr><td colspan="7" class="muted">Поки порожньо — додай банку вище.</td></tr>`; return; }
+      if (!jars.length) { tb.innerHTML = `<tr><td colspan="8" class="muted">Поки порожньо — додай банку вище.</td></tr>`; return; }
       tb.innerHTML = jars.map(j => `
         <tr class="jar" data-ref="${j.ref}" data-name="${(j.name||j.ref).replace(/"/g,'&quot;')}">
           <td>${j.bank}</td>
           <td>${j.name || ""}<div class="muted mono">${j.ref}</div></td>
           <td class="mono">${fmtCard(j.card)}</td>
-          <td class="right">${money(j.balance, j.currency)}</td>
+          <td class="right">${money(j.accumulated, j.currency)}</td>
+          <td class="right muted">${money(j.balance, j.currency)}</td>
           <td><span class="pill">${j.status}</span>${j.last_error ? ` <span class="err" title="${j.last_error.replace(/"/g,'&quot;')}">!</span>` : ""}</td>
           <td class="muted">${time(j.last_polled_at)}</td>
           <td style="white-space:nowrap;">
