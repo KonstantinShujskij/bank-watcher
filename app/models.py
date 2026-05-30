@@ -13,6 +13,16 @@ class RegisterJarRequest(BaseModel):
     callback_url: Optional[str] = Field(default=None, description="URL для колбеків про зарахування")
 
 
+class ResolveRefRequest(BaseModel):
+    url: str = Field(description="Посилання на банку/збір або готовий ref")
+    bank: Optional[str] = Field(default=None, description="Банк/адаптер; якщо не вказано — визначається з url")
+
+
+class ResolveRefOut(BaseModel):
+    ref: str
+    bank: str
+
+
 class JarOut(BaseModel):
     ref: str
     bank: str

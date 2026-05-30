@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..adapters import available_banks, detect_bank, get_adapter
 from ..db import Database
-from ..models import CreditOut, JarOut, RegisterJarRequest
+from ..models import CreditOut, JarOut, RegisterJarRequest, ResolveRefOut, ResolveRefRequest
 
 router = APIRouter(prefix="/api")
 
@@ -80,6 +80,25 @@ async def register_jar(
         currency=jar.currency, baseline_amount=jar.amount, callback_url=req.callback_url,
     )
     return _jar_out(await db.get_jar(ref))
+
+
+@router.post("/jars/resolve", response_model=ResolveRefOut)
+async def resolve_ref(req: ResolveRefRequest):
+    """Розпарсити ref банки з url БЕЗ підписки/запису в БД.
+
+    ncP2P викликає це на pre-check у діалозі створення виводу, щоб дізнатися
+    ref і показати, чи ця банка вже використовувалась іншими виводами. Парсинг
+    лишається єдиним джерелом істини тут (а не дублюється в ncP2P).
+    """
+    bank = req.bank or detect_bank(req.url) or "mono"
+    try:
+        adapter = get_adapter(bank)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    ref = adapter.parse_ref(req.url)
+    if not ref:
+        raise HTTPException(400, "Не вдалося розпізнати ref збору з url")
+    return ResolveRefOut(ref=ref, bank=bank)
 
 
 @router.get("/jars", response_model=list[JarOut])
