@@ -1,8 +1,16 @@
 """Поллер зборів: раз на POLL_INTERVAL опитує активні банки і фіксує зарахування.
 
-Зарахування = приріст `amount` (усього зібрано) між опитуваннями. Дедуп —
-синтетичний id від кумулятивного балансу: він монотонний, тож унікальний на
-межу кредиту, і повторне зчитування того ж балансу не створює дубль.
+Зарахування = приріст `amount` між опитуваннями. УВАГА: `amount` банок (моно
+`jarAmount`, PUMB `total_amount`) — це ПОТОЧНИЙ баланс, він ПАДАЄ при знятті, а
+не монотонне «усього зібрано» (перевірено на живому API). Тому дедуп НЕ можна
+якорити на балансі: банка може наповнитись до того самого значення ще раз —
+і реальне повторне зарахування відкинулось би як «дубль».
+
+Дедуп якоримо на `cumulative_in` — нашому монотонному лічильнику суми всіх
+зарахованих приростів по банці. Він рухається у `update_jar_snapshot` РАЗОМ зі
+знімком (тобто ПІСЛЯ вставки кредиту), тож якщо впадемо між вставкою і знімком,
+наступний тік перерахує той самий id (no-op, без дубля); а кожен РЕАЛЬНИЙ новий
+депозит дає більший cumulative → унікальний id.
 """
 from __future__ import annotations
 
@@ -21,8 +29,11 @@ from .callbacks import CallbackSender
 log = logging.getLogger("poller")
 
 
-def credit_id(jar_ref: str, balance_after: int) -> str:
-    return hashlib.sha256(f"{jar_ref}:{balance_after}".encode()).hexdigest()[:32]
+def credit_id(jar_ref: str, cumulative_in: int) -> str:
+    # Якір — монотонний cumulative_in (НЕ поточний баланс, який повторюється).
+    # Тег "v2" відокремлює простір id від історичних balance-based id, щоб
+    # випадковий збіг числа не зіткнувся з уже відправленим раніше кредитом.
+    return hashlib.sha256(f"{jar_ref}:v2:{cumulative_in}".encode()).hexdigest()[:32]
 
 
 class Poller:
@@ -94,10 +105,13 @@ class Poller:
 
             inserted = False
             cid = ""
+            cumulative_in = jar["cumulative_in"]  # без кредиту — лишається незмінним
             if delta > 0:
-                # 1) спершу фіксуємо кредит (idempotent), 2) потім рухаємо знімок —
-                # якщо впадемо між кроками, наступний тік повторно вставить той самий id (no-op)
-                cid = credit_id(jar["ref"], fresh.amount)
+                # 1) спершу фіксуємо кредит (idempotent по id), 2) потім рухаємо знімок
+                # РАЗОМ із cumulative_in — якщо впадемо між кроками, наступний тік
+                # перерахує той самий cumulative → той самий id → no-op (без дубля).
+                cumulative_in = jar["cumulative_in"] + delta
+                cid = credit_id(jar["ref"], cumulative_in)
                 inserted = await self.db.insert_credit(
                     id=cid, jar_ref=jar["ref"], bank=jar["bank"], card=jar["card"],
                     amount=delta, balance_after=fresh.amount, currency=fresh.currency,
@@ -105,7 +119,8 @@ class Poller:
                 )
 
             await self.db.update_jar_snapshot(
-                jar["ref"], last_amount=fresh.amount, last_withdrawal=fresh.withdrawal, last_error=None
+                jar["ref"], last_amount=fresh.amount, last_withdrawal=fresh.withdrawal,
+                cumulative_in=cumulative_in, last_error=None,
             )
 
             if inserted:

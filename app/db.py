@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS jars (
     baseline_amount INTEGER NOT NULL DEFAULT 0,
     last_amount     INTEGER NOT NULL DEFAULT 0,
     last_withdrawal INTEGER NOT NULL DEFAULT 0,
+    cumulative_in   INTEGER NOT NULL DEFAULT 0,
     callback_url    TEXT,
     status          TEXT NOT NULL DEFAULT 'active',
     created_at      INTEGER NOT NULL,
@@ -61,6 +62,14 @@ class Database:
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.executescript(SCHEMA)
+        # Міграція для наявних БД: CREATE TABLE IF NOT EXISTS не додає нову колонку
+        # до вже створеної таблиці. cumulative_in — монотонний якір дедупу кредитів
+        # (див. poller.credit_id), щоб повторне наповнення банки до того самого
+        # балансу не відкидалось як дублікат.
+        cur = await self._db.execute("PRAGMA table_info(jars)")
+        cols = [r[1] for r in await cur.fetchall()]
+        if "cumulative_in" not in cols:
+            await self._db.execute("ALTER TABLE jars ADD COLUMN cumulative_in INTEGER NOT NULL DEFAULT 0")
         await self._db.commit()
 
     async def close(self) -> None:
@@ -109,10 +118,10 @@ class Database:
         await self.db.execute("UPDATE jars SET status=? WHERE ref=?", (status, ref))
         await self.db.commit()
 
-    async def update_jar_snapshot(self, ref, *, last_amount, last_withdrawal, last_error=None) -> None:
+    async def update_jar_snapshot(self, ref, *, last_amount, last_withdrawal, cumulative_in, last_error=None) -> None:
         await self.db.execute(
-            "UPDATE jars SET last_amount=?, last_withdrawal=?, last_polled_at=?, last_error=? WHERE ref=?",
-            (last_amount, last_withdrawal, now_ms(), last_error, ref),
+            "UPDATE jars SET last_amount=?, last_withdrawal=?, cumulative_in=?, last_polled_at=?, last_error=? WHERE ref=?",
+            (last_amount, last_withdrawal, cumulative_in, now_ms(), last_error, ref),
         )
         await self.db.commit()
 
