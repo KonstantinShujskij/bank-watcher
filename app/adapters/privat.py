@@ -1,47 +1,42 @@
 """Адаптер Privat24-зборів (next.privat24.ua/send/<code>) через headless-браузер.
 
 ЧОМУ БРАУЗЕР (а не httpx, як mono/PUMB):
-  Зібрана/цільова сума публічна (видно анонімно), але публічне API
-  (`/api/p24/pub/envelopes/pubinfo`) за ГОСТЬОВОЮ сесією з `/api/p24/init`, а
-  init антибот-гейтнутий: bare-запит дає 403 і з сервера, і з резидентного IP
-  (fingerprint via fingerprint.pb.ua). Сесія народжується ЛИШЕ у справжньому
-  браузері → читаємо headless Chromium (Playwright).
+  Сума збору публічна, але публічне API (`/api/p24/pub/...`) за ГОСТЬОВОЮ сесією
+  з `/api/p24/init`, який антибот-гейтнутий (fingerprint) → bare httpx-init дає
+  403. Сесія народжується ЛИШЕ у справжньому браузері.
 
-ОПТИМІЗАЦІЯ під ~5 банок одночасно:
-  • ОДИН спільний браузер + контекст — гостьова сесія/fingerprint піднімається
-    РАЗ і переюзається на всі банки й цикли (головна економія).
-  • Ефемерна сторінка на кожен fetch (renderer звільняється одразу) +
-    bounded-concurrency (семафор PRIVAT_CONCURRENCY) — 5 банок не відкривають
-    5 рендерерів водночас і не з'їдають RAM.
-  • Блокування зайвих запитів (картинки/шрифти/аналітика; fingerprint/payhub
-    НЕ блокуємо — потрібні для сесії).
-  • Recycle браузера кожні N навігацій / після серії помилок — проти лік-кріпу
-    і для оновлення сесії.
-  • Lazy-init: поки нема Privat-банок — браузер не стартує (нуль накладних на
-    mono/PUMB). Трафік Chromium іде через VPN-тунель боксу (порти 22/8080 в
-    allowlist — bypass; решта через exit).
+ШВИДКА МОДЕЛЬ (in-page pubinfo замість повного рендеру):
+  Один headless-браузер + контекст + ОДНА персистентна сторінка тримають
+  гостьову сесію. `xref` — СЕСІЙНИЙ токен (один на сесію), тож ОДНА сесія полить
+  УСІ банки легкими XHR-ами прямо зі сторінки:
+    • ziplink {action:"get", hash:<code>, type:"sharing", xref}  → data.value → refEnv
+    • envelopes/pubinfo {xref, refEnv}                            → data.deposit (зібрано)
+  refEnv кешуємо на code. Полл = ~частки секунди (без рендеру) → пам'ять стабільна
+  (~0.6 ГБ) незалежно від кількості банок і частоти. Сесію бутстрапимо ОДНОЮ
+  повною навігацією (звідти ловимо xref). При протуханні (pubinfo != success) —
+  re-bootstrap; повна навігація з читанням суми з DOM лишається фолбеком.
+
+  Lazy-init: поки нема Privat-банок — браузер не стартує. Трафік іде через
+  VPN-тунель боксу (порти 22/8080 в allowlist — bypass).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 
-import httpx  # сигнатура fetch_jar спільна; для privat httpx-клієнт НЕ використовується
+import httpx  # сигнатура fetch_jar спільна; httpx-клієнт для privat НЕ використовується
 
 from ..config import settings
 from .base import BankAdapter, NormalizedJar
 
 log = logging.getLogger("privat")
 
-# "0.00 UAH / 25 000.00" → (зібрано, ціль) у гривнях (  = nbsp між розрядами)
-_AMOUNT_RE = re.compile(r"([\d\s .,]+)\s*UAH\s*/\s*([\d\s .,]+)")
-_NAME_RE = re.compile(r"([^\n]+)\n[\d\s .,]+\s*UAH\s*/")
+_AMOUNT_RE = re.compile(r"([\d\s .,]+)\s*UAH\s*/\s*([\d\s .,]+)")  # фолбек-парс DOM
 _CODE_RE = re.compile(r"/send/([A-Za-z0-9]+)")
 _UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124 Safari/537.36")
-
-# суто сторонні трекери/реклама — НЕ privat/payhub/fingerprint (ті потрібні для сесії)
 _BLOCK_HOSTS = ("googletagmanager", "google-analytics", "analytics.google", "doubleclick",
                 "tiktok", "licdn", "mgid.com", "gstatic", "pay.google", "snap.licdn")
 _LAUNCH_ARGS = ["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox",
@@ -49,38 +44,53 @@ _LAUNCH_ARGS = ["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox",
                 "--blink-settings=imagesEnabled=false", "--disable-background-networking",
                 "--mute-audio"]
 
+# In-page: ziplink(code)->refEnv (якщо треба) + pubinfo(refEnv)->дані. Date.now() — у браузері.
+_PUBINFO_JS = """
+async ({hash, refEnv, xref}) => {
+  const base = "/api/p24/pub";
+  const post = async (p, b) => {
+    const r = await fetch(base + p, {method: "POST", credentials: "include",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(Object.assign({}, b, {xref, _: Date.now()}))});
+    return await r.json().catch(() => null);
+  };
+  let env = refEnv;
+  if (!env) {
+    const z = await post("/ziplink", {action: "get", hash, type: "sharing"});
+    if (!z || z.status !== "success") return {ok: false, step: "ziplink", status: z && z.status, msg: z && z.message};
+    try { env = JSON.parse(z.data.value).payload.refEnv; } catch (e) { return {ok: false, step: "ziplink-parse"}; }
+  }
+  const pi = await post("/envelopes/pubinfo", {refEnv: env});
+  if (!pi || pi.status !== "success") return {ok: false, step: "pubinfo", status: pi && pi.status, msg: pi && pi.message, refEnv: env};
+  const d = pi.data || {};
+  return {ok: true, refEnv: env, deposit: d.deposit, available: d.availableBalance, goal: d.goalAmount, name: d.envName};
+}
+"""
 
-def _to_kop(uah: str) -> int:
-    return round(float(uah.replace(" ", "").replace(" ", "").replace(",", ".")) * 100)
+
+def _to_kop(v) -> int:
+    s = str(v).replace(" ", "").replace(" ", "").replace(",", ".")
+    return round(float(s) * 100)
 
 
-class _SharedBrowser:
-    """Один headless-браузер + контекст (одна гостьова сесія) на весь процес."""
+def _code(url_or_code: str) -> str:
+    s = (url_or_code or "").strip()
+    m = _CODE_RE.search(s)
+    return m.group(1) if m else s.split("?")[0].rstrip("/").split("/")[-1].strip()
+
+
+class _PrivatSession:
+    """Одна гостьова сесія (браузер+контекст+сторінка) на всі банки."""
 
     def __init__(self) -> None:
         self._pw = None
         self._browser = None
         self._ctx = None
-        self._lock = asyncio.Lock()          # серіалізує init/recycle
-        self._n = max(1, settings.privat_concurrency)
-        self._sem = asyncio.Semaphore(self._n)
-        self._navs = 0
-        self._errors = 0
-
-    async def _ensure(self) -> None:
-        if self._ctx is not None:
-            return
-        async with self._lock:
-            if self._ctx is not None:
-                return
-            from playwright.async_api import async_playwright  # lazy: import лише коли є Privat-банка
-            self._pw = await async_playwright().start()
-            self._browser = await self._pw.chromium.launch(headless=True, args=_LAUNCH_ARGS)
-            self._ctx = await self._browser.new_context(user_agent=_UA, locale="uk-UA")
-            await self._ctx.route("**/*", self._route)
-            self._navs = 0
-            self._errors = 0
-            log.info("[privat] browser launched (concurrency=%d)", self._n)
+        self._page = None
+        self._xref: str | None = None
+        self._refenv: dict[str, str] = {}   # code -> refEnv (кеш)
+        self._lock = asyncio.Lock()          # серіалізує доступ до єдиної сторінки
+        self._polls = 0
 
     async def _route(self, route) -> None:
         req = route.request
@@ -90,90 +100,115 @@ class _SharedBrowser:
         except Exception:
             pass
 
-    async def fetch(self, url: str) -> tuple[int, int, str | None]:
-        """Навігація → (collected_kop, goal_kop, name). Bounded-concurrency + recycle."""
-        text = None
-        err: Exception | None = None
-        async with self._sem:
-            await self._ensure()
-            page = await self._ctx.new_page()
-            try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=settings.privat_nav_timeout_ms)
-                await page.wait_for_function(
-                    "() => /UAH\\s*\\//.test(document.body.innerText)",
-                    timeout=settings.privat_nav_timeout_ms,
-                )
-                text = await page.inner_text("body")
-            except Exception as e:
-                err = e
-            finally:
+    async def _bootstrap(self, code: str) -> None:
+        """Підняти браузер (за потреби) і навігацією встановити сесію + зловити xref."""
+        if self._page is None:
+            from playwright.async_api import async_playwright
+            self._pw = await async_playwright().start()
+            self._browser = await self._pw.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+            self._ctx = await self._browser.new_context(user_agent=_UA, locale="uk-UA")
+            await self._ctx.route("**/*", self._route)
+            self._page = await self._ctx.new_page()
+            log.info("[privat] browser launched")
+
+        xref_box: dict[str, str] = {}
+
+        def on_req(req):
+            if "xref" in xref_box:
+                return
+            if "ziplink" in req.url or "pubinfo" in req.url:
                 try:
-                    await page.close()
+                    x = json.loads(req.post_data or "{}").get("xref")
+                    if x:
+                        xref_box["xref"] = x
                 except Exception:
                     pass
-            self._navs += 1
-            self._errors = self._errors + 1 if err is not None else 0
 
-        if self._navs >= settings.privat_recycle_every or self._errors >= settings.privat_recycle_on_errors:
-            await self._recycle()
-        if err is not None:
-            raise err
-
-        m = _AMOUNT_RE.search(text)
-        if not m:
-            raise RuntimeError("Privat: суму збору не знайдено на сторінці")
-        nm = _NAME_RE.search(text)
-        return _to_kop(m.group(1)), _to_kop(m.group(2)), (nm.group(1).strip() if nm else None)
-
-    async def _recycle(self) -> None:
-        # дренуємо ВСІ слоти → чекаємо завершення активних fetch, тоді закриваємо
-        for _ in range(self._n):
-            await self._sem.acquire()
+        self._page.on("request", on_req)
         try:
-            log.info("[privat] recycling browser (navs=%d errors=%d)", self._navs, self._errors)
-            await self._close_inner()
-        finally:
-            for _ in range(self._n):
-                self._sem.release()
-
-    async def _close_inner(self) -> None:
-        for obj, meth in ((self._ctx, "close"), (self._browser, "close"), (self._pw, "stop")):
+            await self._page.goto(f"https://next.privat24.ua/send/{code}",
+                                  wait_until="domcontentloaded", timeout=settings.privat_nav_timeout_ms)
+            # дочекатись, поки SPA зробить ziplink/pubinfo (звідти xref) — індикатор: сума в DOM
             try:
-                if obj:
-                    await getattr(obj, meth)()
+                await self._page.wait_for_function(
+                    "() => /UAH\\s*\\//.test(document.body.innerText)", timeout=settings.privat_nav_timeout_ms)
             except Exception:
                 pass
-        self._ctx = self._browser = self._pw = None
-        self._navs = self._errors = 0
+        finally:
+            self._page.remove_listener("request", on_req)
+
+        if xref_box.get("xref"):
+            self._xref = xref_box["xref"]
+            log.info("[privat] session established (xref captured)")
+        elif not self._xref:
+            # не зловили xref і нема старого → фолбек-значення витягнемо з DOM у виклику
+            raise RuntimeError("Privat: не вдалося захопити xref сесії")
+
+    async def _dom_amount(self) -> int | None:
+        """Фолбек: прочитати зібране з відрендереної сторінки (після _bootstrap)."""
+        try:
+            m = _AMOUNT_RE.search(await self._page.inner_text("body"))
+            return _to_kop(m.group(1)) if m else None
+        except Exception:
+            return None
+
+    async def fetch(self, code: str) -> tuple[int, str | None]:
+        """(collected_kop, name). Швидкий шлях pubinfo; re-bootstrap при протуханні."""
+        async with self._lock:
+            for attempt in (1, 2):
+                if self._page is None or self._xref is None:
+                    await self._bootstrap(code)
+                res = await self._page.evaluate(
+                    _PUBINFO_JS, {"hash": code, "refEnv": self._refenv.get(code), "xref": self._xref})
+                if res and res.get("ok"):
+                    self._refenv[code] = res["refEnv"]
+                    self._polls += 1
+                    amount = res.get("deposit")
+                    if amount is None:
+                        amount = res.get("available")
+                    return _to_kop(amount), res.get("name")
+                # невдача → сесія/xref протухли: скинути й re-bootstrap (1 повтор)
+                log.warning("[privat] api fetch failed (%s) for %s — re-bootstrap", res, code)
+                self._xref = None
+                self._refenv.pop(code, None)
+                if attempt == 1:
+                    await self._bootstrap(code)
+                    continue
+                # другий провал — фолбек на DOM відрендереної сторінки
+                dom = await self._dom_amount()
+                if dom is not None:
+                    return dom, None
+                raise RuntimeError(f"Privat: не вдалося отримати дані ({res})")
 
     async def close(self) -> None:
         async with self._lock:
-            await self._close_inner()
+            for obj, meth in ((self._ctx, "close"), (self._browser, "close"), (self._pw, "stop")):
+                try:
+                    if obj:
+                        await getattr(obj, meth)()
+                except Exception:
+                    pass
+            self._pw = self._browser = self._ctx = self._page = None
+            self._xref = None
+            self._refenv.clear()
 
 
-_BROWSER = _SharedBrowser()
+_SESSION = _PrivatSession()
 
 
 class PrivatAdapter(BankAdapter):
     bank = "privat"
-    poll_interval = settings.privat_poll_interval  # Privat-агрегат повільний + браузер дорогий
+    poll_interval = settings.privat_poll_interval
 
     def parse_ref(self, text: str) -> str:
-        text = (text or "").strip()
-        m = _CODE_RE.search(text)
-        if m:
-            return m.group(1)
-        return text.split("?")[0].rstrip("/").split("/")[-1].strip()  # голий код
+        return _code(text)
 
     async def fetch_jar(self, ref: str, client: httpx.AsyncClient) -> NormalizedJar:
         # client (httpx) НЕ використовується — Privat читається браузером.
-        url = f"https://next.privat24.ua/send/{ref}"
-        collected, _goal, name = await _BROWSER.fetch(url)
-        # amount = зібрано (копійки), монотонність не гарантована → дедуп на стороні
-        # поллера через cumulative_in (bank-agnostic).
+        collected, name = await _SESSION.fetch(ref)
+        # amount = зібрано (копійки); дедуп на стороні поллера через cumulative_in.
         return NormalizedJar(ref=ref, name=name or ref, amount=collected, withdrawal=0, currency="980")
 
 
 async def aclose_browser() -> None:
-    """Закрити спільний браузер (виклик при shutdown сервісу)."""
-    await _BROWSER.close()
+    await _SESSION.close()
