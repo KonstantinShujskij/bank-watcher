@@ -1,8 +1,8 @@
 # bank-watcher
 
-Active branch: `main`. Standalone Python/FastAPI service that monitors bank **jar/збір** links and auto-confirms ncP2P deposits by detecting top-ups (balance-delta). SQLite + NordVPN. Part of the ncp ecosystem.
+Active branch: `main`. Standalone Python/FastAPI service that monitors bank **jar/збір** links (monobank + PUMB + **Privat24** via headless Chromium/Playwright) and auto-confirms ncP2P deposits by detecting top-ups (balance-delta). SQLite + NordVPN. Part of the ncp ecosystem.
 
-- **Server:** `ssh bank-watcher` → `168.100.8.94`, code at `/opt/bank-watcher`, systemd `bank-watcher.service`.
+- **Server:** `ssh bank-watcher` → `206.188.197.2` (Ubuntu 26.04, 2 vCPU/2 GB; migrated May 2026 from `168.100.8.94`), code at `/opt/bank-watcher`, systemd `bank-watcher.service`.
 - **Local path:** `ncp/ncp2p/bank-watcher`.
 
 ## Always read first
