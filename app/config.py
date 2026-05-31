@@ -54,5 +54,15 @@ class Settings:
     vpn_research_cooldown: int = int(os.getenv("VPN_RESEARCH_COOLDOWN", "60"))  # мін. інтервал між пошуками (анти-трешинг)
     vpn_fallback_direct: bool = _bool("VPN_FALLBACK_DIRECT", "true")     # нема робочого екзиту → прямий IP
 
+    # Privat (headless-браузер): агрегат повільний + Chromium дорогий, тож рідкісний полінг
+    # і обмежена паралельність (5 банок не відкривають 5 рендерерів водночас на 2 ГБ-боксі).
+    privat_poll_interval: float = float(os.getenv("PRIVAT_POLL_INTERVAL", "30"))   # сек між полами банки
+    # 1 = послідовно (≈750 МБ реального RAM, перевірено на боксі — безпечно поряд із money-сервісом
+    # на 2 ГБ). 2 паралельні сторінки ≈ вдвічі більше RAM (тримати лише з достатнім запасом/swap).
+    privat_concurrency: int = int(os.getenv("PRIVAT_CONCURRENCY", "1"))            # макс. одночасних сторінок
+    privat_nav_timeout_ms: int = int(os.getenv("PRIVAT_NAV_TIMEOUT_MS", "45000"))
+    privat_recycle_every: int = int(os.getenv("PRIVAT_RECYCLE_EVERY", "40"))       # recycle браузера кожні N навігацій
+    privat_recycle_on_errors: int = int(os.getenv("PRIVAT_RECYCLE_ON_ERRORS", "3"))  # ...або після N помилок поспіль
+
 
 settings = Settings()

@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth
 from .adapters import get_adapter
+from .adapters.privat import aclose_browser as aclose_privat_browser
 from .api.routes import router
 from .config import settings
 from .core.callbacks import CallbackSender
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):
         await poller.stop()
         await sender.stop()
         await vpn.stop()
+        await aclose_privat_browser()   # закрити headless-браузер Privat, якщо стартував
         await client.aclose()
         await db.close()
 

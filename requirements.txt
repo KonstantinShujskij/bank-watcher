@@ -5,3 +5,4 @@ aiosqlite>=0.20
 cryptography>=42.0
 python-dotenv>=1.0
 python-multipart>=0.0.9
+playwright>=1.40            # headless Chromium для Privat-адаптера (app/adapters/privat.py)

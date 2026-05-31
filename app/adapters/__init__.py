@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 from .base import BankAdapter, NormalizedJar
 from .monobank import MonobankAdapter
+from .privat import PrivatAdapter
 from .pumb import PumbAdapter
 
 _ADAPTERS: dict[str, BankAdapter] = {}
@@ -16,6 +17,9 @@ _HOST_BANK: dict[str, str] = {
     "frames.payhub.com.ua": "pumb",   # frames-URL із box_id
     "frames2.payhub.com.ua": "pumb",
     "rlyeh2.payhub.com.ua": "pumb",
+    "next.privat24.ua": "privat",     # Privat24 /send/<code>
+    "privat24.ua": "privat",
+    "www.privat24.ua": "privat",
 }
 
 
@@ -43,5 +47,6 @@ def available_banks() -> list[str]:
 # Вбудовані адаптери
 register(MonobankAdapter())
 register(PumbAdapter())
+register(PrivatAdapter())
 
 __all__ = ["BankAdapter", "NormalizedJar", "register", "get_adapter", "available_banks", "detect_bank"]
