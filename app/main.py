@@ -19,6 +19,7 @@ from .adapters.privat import aclose_browser as aclose_privat_browser
 from .api.routes import router
 from .config import settings
 from .core.callbacks import CallbackSender
+from .core.memtrace import MemTracer, maybe_start as memtrace_start
 from .core.poller import Poller
 from .db import Database
 from .vpn.nordvpn import NordVPN
@@ -28,6 +29,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 log = logging.getLogger("main")
+
+# Опційний пошук витоку памʼяті: стартуємо tracemalloc якомога раніше (до
+# основних алокацій). Вмикається env TRACEMALLOC=1; інакше нульовий оверхед.
+memtrace_start()
 
 WEB_STATIC = Path(__file__).parent / "web" / "static"
 
@@ -55,13 +60,17 @@ async def lifespan(app: FastAPI):
     app.state.db = db
     app.state.client = client
 
+    tracer = MemTracer()   # no-op, якщо tracemalloc вимкнено
+
     vpn.start()
     sender.start()
     poller.start()
+    tracer.start()
     log.info("bank-watcher up on %s:%s", settings.host, settings.port)
     try:
         yield
     finally:
+        await tracer.stop()
         await poller.stop()
         await sender.stop()
         await vpn.stop()
