@@ -11,10 +11,12 @@
   УСІ банки легкими XHR-ами прямо зі сторінки:
     • ziplink {action:"get", hash:<code>, type:"sharing", xref}  → data.value → refEnv
     • envelopes/pubinfo {xref, refEnv}                            → data.deposit (зібрано)
-  refEnv кешуємо на code. Полл = ~частки секунди (без рендеру) → пам'ять стабільна
-  (~0.6 ГБ) незалежно від кількості банок і частоти. Сесію бутстрапимо ОДНОЮ
-  повною навігацією (звідти ловимо xref). При протуханні (pubinfo != success) —
-  re-bootstrap; повна навігація з читанням суми з DOM лишається фолбеком.
+  refEnv кешуємо на code. Полл = ~частки секунди (без рендеру). УВАГА: persistent-
+  сторінка накопичує мережеві обʼєкти Playwright (Request/Response) + RSS Chromium
+  БЕЗМЕЖНО (підтверджено tracemalloc на проді), тож браузер ПЕРІОДИЧНО
+  перествоюється (PRIVAT_RECYCLE_SECONDS) — це скидає і Python-обʼєкти, і памʼять
+  Chromium. Сесію бутстрапимо ОДНОЮ повною навігацією (звідти ловимо xref). При
+  протуханні (pubinfo != success) — re-bootstrap; читання суми з DOM — фолбек.
 
   Lazy-init: поки нема Privat-банок — браузер не стартує. Трафік іде через
   VPN-тунель боксу (порти 22/8080 в allowlist — bypass).
@@ -25,6 +27,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 
 import httpx  # сигнатура fetch_jar спільна; httpx-клієнт для privat НЕ використовується
 
@@ -91,6 +94,7 @@ class _PrivatSession:
         self._refenv: dict[str, str] = {}   # code -> refEnv (кеш)
         self._lock = asyncio.Lock()          # серіалізує доступ до єдиної сторінки
         self._polls = 0
+        self._launched_at = 0.0              # monotonic-час старту браузера (для рециклінгу)
 
     async def _route(self, route) -> None:
         req = route.request
@@ -109,6 +113,7 @@ class _PrivatSession:
             self._ctx = await self._browser.new_context(user_agent=_UA, locale="uk-UA")
             await self._ctx.route("**/*", self._route)
             self._page = await self._ctx.new_page()
+            self._launched_at = time.monotonic()
             log.info("[privat] browser launched")
 
         xref_box: dict[str, str] = {}
@@ -155,6 +160,12 @@ class _PrivatSession:
     async def fetch(self, code: str) -> tuple[int, str | None]:
         """(collected_kop, name). Швидкий шлях pubinfo; re-bootstrap при протуханні."""
         async with self._lock:
+            # Періодичний рециклінг: persistent-сторінка безмежно накопичує мережеві
+            # обʼєкти Playwright + RSS Chromium → раз на N сек перествоюємо браузер.
+            if self._page is not None and (time.monotonic() - self._launched_at) > settings.privat_recycle_seconds:
+                log.info("[privat] recycling browser after %.0fs to release memory",
+                         time.monotonic() - self._launched_at)
+                await self._teardown()
             for attempt in (1, 2):
                 if self._page is None or self._xref is None:
                     await self._bootstrap(code)
@@ -180,17 +191,21 @@ class _PrivatSession:
                     return dom, None
                 raise RuntimeError(f"Privat: не вдалося отримати дані ({res})")
 
+    async def _teardown(self) -> None:
+        """Закрити браузер/контекст/сторінку. БЕЗ локу — викликати під захопленим."""
+        for obj, meth in ((self._ctx, "close"), (self._browser, "close"), (self._pw, "stop")):
+            try:
+                if obj:
+                    await getattr(obj, meth)()
+            except Exception:
+                pass
+        self._pw = self._browser = self._ctx = self._page = None
+        self._xref = None
+        self._refenv.clear()
+
     async def close(self) -> None:
         async with self._lock:
-            for obj, meth in ((self._ctx, "close"), (self._browser, "close"), (self._pw, "stop")):
-                try:
-                    if obj:
-                        await getattr(obj, meth)()
-                except Exception:
-                    pass
-            self._pw = self._browser = self._ctx = self._page = None
-            self._xref = None
-            self._refenv.clear()
+            await self._teardown()
 
 
 _SESSION = _PrivatSession()

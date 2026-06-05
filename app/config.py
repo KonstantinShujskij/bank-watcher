@@ -58,6 +58,10 @@ class Settings:
     # (~0.1с/полл, ~330 МБ стабільно). Бутстрап сесії — одна повна навігація (~6с).
     privat_poll_interval: float = float(os.getenv("PRIVAT_POLL_INTERVAL", "5"))    # сек між полами банки
     privat_nav_timeout_ms: int = int(os.getenv("PRIVAT_NAV_TIMEOUT_MS", "45000"))  # таймаут бутстрап-навігації
+    # Persistent Playwright-сторінка накопичує мережеві обʼєкти (Request/Response)
+    # і RSS Chromium безмежно → періодично перествоюємо весь браузер (скидає і
+    # Python-обʼєкти Playwright, і памʼять Chromium). Ціна — один ~6с ре-бутстрап.
+    privat_recycle_seconds: float = float(os.getenv("PRIVAT_RECYCLE_SECONDS", "1800"))  # 30 хв
 
 
 settings = Settings()

@@ -96,7 +96,10 @@ class Poller:
             except Exception as exc:
                 await self.db.mark_jar_error(jar["ref"], str(exc))
                 log.warning("fetch %s failed: %s", jar["ref"], exc)
-                if self._on_fetch_error:
+                # VPN re-search лише для monobank: тільки його екзит чутливий до
+                # 403 на датацентрові IP. Фейл PUMB/Privat (напр. флапаючий
+                # headless-браузер) НЕ має смикати VPN-екзит, який потрібен mono.
+                if self._on_fetch_error and jar["bank"] == "mono":
                     try: self._on_fetch_error()
                     except Exception: pass
                 return
