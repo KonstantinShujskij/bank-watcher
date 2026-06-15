@@ -169,8 +169,21 @@ class _PrivatSession:
             for attempt in (1, 2):
                 if self._page is None or self._xref is None:
                     await self._bootstrap(code)
-                res = await self._page.evaluate(
-                    _PUBINFO_JS, {"hash": code, "refEnv": self._refenv.get(code), "xref": self._xref})
+                # Playwright НЕ таймаутить page.evaluate сам → обгортаємо: завислий
+                # браузер не сміє висіти вічно (інакше клинить весь полл-тік). На
+                # таймаут — повний teardown (браузер завис), наступний прохід підніме свіжий.
+                try:
+                    res = await asyncio.wait_for(
+                        self._page.evaluate(
+                            _PUBINFO_JS, {"hash": code, "refEnv": self._refenv.get(code), "xref": self._xref}),
+                        timeout=settings.privat_eval_timeout)
+                except asyncio.TimeoutError:
+                    log.warning("[privat] evaluate hung (%ss) for %s → teardown browser",
+                                settings.privat_eval_timeout, code)
+                    await self._teardown()
+                    if attempt == 1:
+                        continue
+                    raise RuntimeError(f"Privat: evaluate timeout ({code})")
                 if res and res.get("ok"):
                     self._refenv[code] = res["refEnv"]
                     self._polls += 1
@@ -204,6 +217,10 @@ class _PrivatSession:
         self._refenv.clear()
 
     async def close(self) -> None:
+        # Дешевий вихід: якщо браузер не піднятий — не чіпаємо лок (idle-teardown
+        # смикає це щотіку, коли немає активних privat-банок).
+        if self._pw is None and self._browser is None:
+            return
         async with self._lock:
             await self._teardown()
 

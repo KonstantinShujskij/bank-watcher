@@ -22,6 +22,7 @@ import time
 import httpx
 
 from ..adapters import get_adapter
+from ..adapters.privat import aclose_browser as aclose_privat_browser
 from ..config import settings
 from ..db import Database
 from .callbacks import CallbackSender
@@ -75,6 +76,10 @@ class Poller:
         jars = await self.db.list_active_jars()
         if jars:
             await asyncio.gather(*(self._poll_jar(j) for j in jars))
+        # Idle-teardown: нема активних privat-банок → закрити headless-браузер
+        # (звільняє RSS Chromium і прибирає завислий/простійний браузер). Ідемпотентно.
+        if not any(j["bank"] == "privat" for j in jars):
+            await aclose_privat_browser()
 
     async def _poll_jar(self, jar) -> None:
         async with self._sem:
@@ -92,7 +97,12 @@ class Poller:
                 return
 
             try:
-                fresh = await adapter.fetch_jar(jar["ref"], self.client)
+                # Бекстоп-таймаут: завислий фетч (напр. headless-браузер Privat)
+                # не сміє висіти вічно й клинити весь gather-тік (mono/pumb теж).
+                fresh = await asyncio.wait_for(
+                    adapter.fetch_jar(jar["ref"], self.client),
+                    timeout=settings.poll_fetch_timeout,
+                )
             except Exception as exc:
                 await self.db.mark_jar_error(jar["ref"], str(exc))
                 log.warning("fetch %s failed: %s", jar["ref"], exc)

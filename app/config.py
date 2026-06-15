@@ -30,6 +30,9 @@ class Settings:
     poll_interval: float = float(os.getenv("POLL_INTERVAL", "1.0"))
     poll_concurrency: int = int(os.getenv("POLL_CONCURRENCY", "8"))
     http_timeout: float = float(os.getenv("HTTP_TIMEOUT", "15"))
+    # Бекстоп: жоден полл однієї банки не може висіти довше за це → не клинить
+    # увесь tick (asyncio.gather). > за найдовший легітимний privat-бутстрап (~90с).
+    poll_fetch_timeout: float = float(os.getenv("POLL_FETCH_TIMEOUT", "120"))
 
     callback_secret: str = os.getenv("CALLBACK_SECRET", "")
     callback_max_attempts: int = int(os.getenv("CALLBACK_MAX_ATTEMPTS", "10"))
@@ -62,6 +65,9 @@ class Settings:
     # і RSS Chromium безмежно → періодично перествоюємо весь браузер (скидає і
     # Python-обʼєкти Playwright, і памʼять Chromium). Ціна — один ~6с ре-бутстрап.
     privat_recycle_seconds: float = float(os.getenv("PRIVAT_RECYCLE_SECONDS", "1800"))  # 30 хв
+    # Таймаут на in-page pubinfo (page.evaluate) — Playwright сам цей виклик НЕ
+    # таймаутить; без нього завислий браузер вішає полл-тік назавжди (інцидент 06-15).
+    privat_eval_timeout: float = float(os.getenv("PRIVAT_EVAL_TIMEOUT", "30"))
 
 
 settings = Settings()
