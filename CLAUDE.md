@@ -21,7 +21,7 @@ Before doing any work, **read these**:
 - `ncp-knowledge/bank-watcher/integration.md` — the ncP2P contract (subscribe, signed callback, matching, BankCredit, dashboard, config)
 - `ncp-knowledge/bank-watcher/deployment.md` — server, systemd, NordVPN reactive exit-search, deploy recipe
 - `ncp-knowledge/shared/glossary.md` — Банка/jar, Invoice, Payment, BankCredit
-- `ncp-knowledge/shared/ssh.md` — SSH alias convention (`bank-watcher` → 168.100.8.94)
+- `ncp-knowledge/shared/ssh.md` — SSH alias convention (`bank-watcher` → 206.188.197.2)
 
 ## Quick orientation (cheat sheet)
 
