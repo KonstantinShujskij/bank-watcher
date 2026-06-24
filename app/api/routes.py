@@ -116,6 +116,24 @@ async def list_jars(db: Database = Depends(get_db)):
     return [await _jar_out(r, db) for r in await db.list_jars()]
 
 
+@router.get("/jars/status")
+async def list_jars_status(db: Database = Depends(get_db)):
+    # Лёгкий список для дашборду/алертів ncP2P: лише поля статусу, БЕЗ per-jar
+    # sum_credits (важкий N+1 у _jar_out). Споживачі (ncP2P listJarsStatus /
+    # computeStaleJars) беруть тільки ці поля. МАЄ бути оголошено ПЕРЕД
+    # /jars/{ref}, інакше FastAPI зматчить "status" як ref.
+    rows = await db.list_jars()
+    return [
+        {
+            "ref": r["ref"],
+            "status": r["status"],
+            "last_polled_at": r["last_polled_at"],
+            "last_error": r["last_error"],
+        }
+        for r in rows
+    ]
+
+
 @router.get("/jars/{ref}", response_model=JarOut)
 async def get_jar(ref: str, db: Database = Depends(get_db)):
     row = await db.get_jar(ref)

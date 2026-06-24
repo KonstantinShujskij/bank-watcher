@@ -22,7 +22,6 @@ import time
 import httpx
 
 from ..adapters import get_adapter
-from ..adapters.privat import aclose_browser as aclose_privat_browser
 from ..config import settings
 from ..db import Database
 from .callbacks import CallbackSender
@@ -76,10 +75,13 @@ class Poller:
         jars = await self.db.list_active_jars()
         if jars:
             await asyncio.gather(*(self._poll_jar(j) for j in jars))
-        # Idle-teardown: нема активних privat-банок → закрити headless-браузер
-        # (звільняє RSS Chromium і прибирає завислий/простійний браузер). Ідемпотентно.
-        if not any(j["bank"] == "privat" for j in jars):
-            await aclose_privat_browser()
+        # Браузер Privat лишаємо ТЕПЛИМ між підписками (варіант A): idle-teardown
+        # прибрано. Холодний бутстрап (launch + SPA-навігація + xref, до ~3 хв із
+        # ретраями по nav-timeout) затримував baseline нової privat-банки → транзакції
+        # за цей час вшивались у baseline і губились. Тепер додавання privat-банки
+        # застає браузер готовим. Пам'ять обмежує періодичний рециклінг у fetch
+        # (privat_recycle_seconds=30хв) + teardown на зависання evaluate; на shutdown
+        # браузер закриває lifespan (main.py).
 
     async def _poll_jar(self, jar) -> None:
         async with self._sem:
