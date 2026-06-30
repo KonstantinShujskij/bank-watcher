@@ -52,10 +52,20 @@ _PUBINFO_JS = """
 async ({hash, refEnv, xref}) => {
   const base = "/api/p24/pub";
   const post = async (p, b) => {
-    const r = await fetch(base + p, {method: "POST", credentials: "include",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(Object.assign({}, b, {xref, _: Date.now()}))});
-    return await r.json().catch(() => null);
+    // таймаут + лов помилок: "Failed to fetch"/abort/мережевий збій → null
+    // (НЕ throw), вище це хендлиться як невдала проба → re-bootstrap, а не сирий стек.
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const r = await fetch(base + p, {method: "POST", credentials: "include", signal: ctrl.signal,
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(Object.assign({}, b, {xref, _: Date.now()}))});
+      return await r.json().catch(() => null);
+    } catch (e) {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
   };
   let env = refEnv;
   if (!env) {
